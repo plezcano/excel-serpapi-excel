@@ -1,14 +1,17 @@
+import sys
+sys.stdout.reconfigure(line_buffering=True)
+
 import pandas as pd
 import logging
+import time
 from pathlib import Path
 
-# Logging que escribe a archivo Y a consola
 logging.basicConfig(
     level=logging.INFO,
     format='%(message)s',
     handlers=[
         logging.FileHandler('payloads_log.txt', mode='w', encoding='utf-8'),
-        logging.StreamHandler()
+        logging.StreamHandler(sys.stdout)
     ]
 )
 log = logging.getLogger(__name__)
@@ -25,7 +28,7 @@ def leer_excel(ruta: str) -> pd.DataFrame:
     if faltantes:
         raise ValueError(f"Columnas faltantes: {faltantes}")
     df = df[COLUMNAS].dropna(subset=["keyword"]).reset_index(drop=True)
-    log.info(f"Filas a procesar: {len(df)}\n")
+    log.info(f"Filas a procesar: {len(df)}")
     return df
 
 def construir_location(city, state, country) -> str:
@@ -43,21 +46,25 @@ def construir_payload(keyword: str, location: str) -> dict:
     }
 
 def simular_envio(df: pd.DataFrame):
-    log.info("=== SIMULACION DE ENVIO A SERPAPI ===\n")
+    log.info("=== SIMULACION DE ENVIO A SERPAPI ===")
+    
     for idx, fila in df.iterrows():
         keyword = fila["keyword"]
         location = construir_location(fila["city"], fila["state"], fila["country"])
         payload = construir_payload(keyword, location)
         
-        log.info(f"[{idx + 1}/{len(df)}] Payload:")
-        for clave, valor in payload.items():
-            log.info(f"    {clave:15} -> {valor}")
-        log.info("")
+        # UNA sola línea por fila — payload completo en formato compacto
+        log.info(f"[{idx + 1}/{len(df)}] q='{payload['q']}' | location='{payload['location']}' | hl={payload['hl']} | gl={payload['gl']} | engine={payload['engine']} | domain={payload['google_domain']}")
+        
+        # Pausa pequeña cada 100 filas para no saturar Railway
+        if (idx + 1) % 100 == 0:
+            time.sleep(0.5)
+    
+    log.info("=== Lectura completa ===")
 
 def main():
     df = leer_excel(EXCEL_FILE)
     simular_envio(df)
-    log.info("=== Lectura completa ===")
 
 if __name__ == "__main__":
     main()
