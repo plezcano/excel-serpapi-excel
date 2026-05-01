@@ -18,10 +18,10 @@ log = logging.getLogger(__name__)
 # === CONFIGURACION ===
 EXCEL_FILE = "3. SEO_Website_DLS.xlsx"
 COLUMNAS = ["keyword", "city", "state", "country"]
-LIMITE_PRUEBA = 10  # ← Solo 10 keywords. Pon None cuando quieras procesar todas.
+LIMITE_PRUEBA = 10
 API_KEY = os.getenv("SERPAPI_KEY")
+TOP_RESULTS = 5  # ← Solo guardar las primeras 5 posiciones de cada SERP
 
-# Diccionario de estados USA
 ESTADOS_USA = {
     "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
     "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware",
@@ -40,12 +40,11 @@ ESTADOS_USA = {
 
 def validar_api_key():
     if not API_KEY:
-        log.error("ERROR: SERPAPI_KEY no esta configurada en variables de entorno")
+        log.error("ERROR: SERPAPI_KEY no esta configurada")
         sys.exit(1)
     log.info(f"API key cargada (termina en ...{API_KEY[-4:]})")
 
 def normalizar_estado(estado):
-    """Convierte 'CA' a 'California'. Si ya está completo, lo deja igual."""
     if pd.isna(estado):
         return estado
     estado_str = str(estado).strip()
@@ -56,25 +55,30 @@ def leer_excel(ruta: str) -> pd.DataFrame:
     if not Path(ruta).exists():
         raise FileNotFoundError(ruta)
     df = pd.read_excel(ruta, header=0)
-    faltantes = [c for c in COLUMNAS if c not in df.columns]
-    if faltantes:
-        raise ValueError(f"Columnas faltantes: {faltantes}")
     df = df[COLUMNAS].dropna(subset=["keyword"]).reset_index(drop=True)
-    
-    # Normalizar estados (CA -> California)
     df["state"] = df["state"].apply(normalizar_estado)
-    
     log.info(f"Total filas en Excel: {len(df)}")
-    
     if LIMITE_PRUEBA:
         df = df.head(LIMITE_PRUEBA)
         log.info(f"MODO PRUEBA: procesando solo las primeras {LIMITE_PRUEBA} filas")
-    
     return df
 
 def construir_location(city, state, country) -> str:
     partes = [str(p).strip() for p in [city, state, country] if pd.notna(p)]
     return ", ".join(partes)
+
+def extraer_top_resultados(organic_results: list, top_n: int) -> list:
+    """Extrae solo los campos que nos interesan de cada resultado."""
+    extraidos = []
+    for r in organic_results[:top_n]:
+        extraidos.append({
+            "position": r.get("position"),
+            "title": r.get("title", ""),
+            "link": r.get("link", ""),
+            "displayed_link": r.get("displayed_link", ""),
+            "snippet": r.get("snippet", "")
+        })
+    return extraidos
 
 def consultar_serp(client, keyword: str, location: str) -> dict:
     return client.search({
@@ -97,17 +101,21 @@ def procesar(df: pd.DataFrame, client) -> list:
         try:
             respuesta = consultar_serp(client, keyword, location)
             organic = respuesta.get("organic_results", [])
-            log.info(f"[{idx + 1}/{len(df)}] OK | '{keyword}' @ {location} | {len(organic)} resultados")
+            top = extraer_top_resultados(organic, TOP_RESULTS)
+            
+            log.info(f"[{idx + 1}/{len(df)}] OK | '{keyword}' | top {len(top)} extraidos de {len(organic)}")
             
             resultados.append({
                 "keyword": keyword,
+                "city": fila["city"],
+                "state": fila["state"],
+                "country": fila["country"],
                 "location": location,
                 "status": "ok",
-                "num_results": len(organic),
-                "organic_results": organic
+                "top_results": top
             })
         except Exception as e:
-            log.error(f"[{idx + 1}/{len(df)}] ERROR | '{keyword}' @ {location} | {str(e)[:100]}")
+            log.error(f"[{idx + 1}/{len(df)}] ERROR | '{keyword}' | {str(e)[:80]}")
             resultados.append({
                 "keyword": keyword,
                 "location": location,
@@ -119,15 +127,28 @@ def procesar(df: pd.DataFrame, client) -> list:
     
     return resultados
 
+def mostrar_muestra(resultados: list):
+    """Imprime un vistazo de la primera consulta exitosa para verificar formato."""
+    primera_ok = next((r for r in resultados if r["status"] == "ok"), None)
+    if not primera_ok:
+        log.info("No hay resultados exitosos para mostrar muestra.")
+        return
+    
+    log.info("=== MUESTRA: primera keyword exitosa ===")
+    log.info(f"Keyword: {primera_ok['keyword']}")
+    log.info(f"Location: {primera_ok['location']}")
+    log.info(f"Top {len(primera_ok['top_results'])} resultados:")
+    for r in primera_ok["top_results"]:
+        log.info(f"  #{r['position']} | {r['title'][:60]}")
+        log.info(f"        URL: {r['link'][:80]}")
+        time.sleep(0.1)  # pausa pequeña para no saturar logs
+
 def resumen(resultados: list):
     ok = sum(1 for r in resultados if r["status"] == "ok")
     err = sum(1 for r in resultados if r["status"] == "error")
-    total_organicos = sum(r.get("num_results", 0) for r in resultados if r["status"] == "ok")
-    
     log.info("=== RESUMEN FINAL ===")
     log.info(f"Consultas exitosas : {ok}")
     log.info(f"Consultas con error: {err}")
-    log.info(f"Total resultados organicos obtenidos: {total_organicos}")
     log.info(f"Creditos SerpApi gastados: ~{ok + err}")
 
 def main():
@@ -135,6 +156,7 @@ def main():
     df = leer_excel(EXCEL_FILE)
     client = serpapi.Client(api_key=API_KEY)
     resultados = procesar(df, client)
+    mostrar_muestra(resultados)
     resumen(resultados)
 
 if __name__ == "__main__":
