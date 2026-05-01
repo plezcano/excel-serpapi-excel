@@ -2,59 +2,70 @@ import pandas as pd
 import logging
 from pathlib import Path
 
-# Configurar logging con formato claro
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s | %(levelname)s | %(message)s',
-    datefmt='%H:%M:%S'
+    format='%(message)s'
 )
 log = logging.getLogger(__name__)
 
 # Configuración
 EXCEL_FILE = "3. SEO_Website_DLS.xlsx"
-SHEET_NAME = 0  # 0 = primera hoja, o usa el nombre: "Sheet1"
+COLUMNAS = ["keyword", "city", "state", "country"]
 
-def leer_excel(ruta: str, hoja=0) -> pd.DataFrame:
-    """Lee el Excel y devuelve un DataFrame limpio."""
-    log.info(f"=== INICIO ===")
+def leer_excel(ruta: str) -> pd.DataFrame:
+    """Lee el Excel y devuelve solo las columnas necesarias."""
     log.info(f"Abriendo archivo: {ruta}")
     
     if not Path(ruta).exists():
         log.error(f"Archivo no encontrado: {ruta}")
         raise FileNotFoundError(ruta)
     
-    df = pd.read_excel(ruta, sheet_name=hoja, header=0)
-    log.info(f"Archivo leído correctamente | Filas: {len(df)} | Columnas: {len(df.columns)}")
-    log.info(f"Columnas detectadas: {list(df.columns)}")
+    df = pd.read_excel(ruta, header=0)
     
-    # Limpieza opcional
-    if "keyword" in df.columns:
-        antes = len(df)
-        df = df.dropna(subset=["keyword"]).reset_index(drop=True)
-        log.info(f"Filas eliminadas sin keyword: {antes - len(df)} | Filas finales: {len(df)}")
+    # Validar columnas
+    faltantes = [c for c in COLUMNAS if c not in df.columns]
+    if faltantes:
+        log.error(f"Faltan columnas en el Excel: {faltantes}")
+        raise ValueError(f"Columnas faltantes: {faltantes}")
     
+    df = df[COLUMNAS].dropna(subset=["keyword"]).reset_index(drop=True)
+    log.info(f"Filas a procesar: {len(df)}\n")
     return df
 
-def imprimir_celdas(df: pd.DataFrame):
-    """Imprime cada celda con prompt detallado: fila, columna y valor."""
-    log.info(f"--- Imprimiendo {len(df)} filas x {len(df.columns)} columnas ---")
+def construir_location(city, state, country) -> str:
+    """Arma el string de location: 'City, State, Country'."""
+    partes = [str(p).strip() for p in [city, state, country] if pd.notna(p)]
+    return ", ".join(partes)
+
+def construir_payload(keyword: str, location: str) -> dict:
+    """Arma el diccionario que se enviaría a SerpApi."""
+    return {
+        "engine": "google",
+        "q": keyword,
+        "location": location,
+        "google_domain": "google.com",
+        "hl": "en",
+        "gl": "us"
+    }
+
+def simular_envio(df: pd.DataFrame):
+    """Recorre cada fila e imprime el payload que se enviaría a SerpApi."""
+    log.info("=== SIMULACIÓN DE ENVÍO A SERPAPI (sin llamar a la API) ===\n")
     
     for idx, fila in df.iterrows():
-        log.info(f"┌── Fila {idx + 1} ──────────────────────")
-        for columna in df.columns:
-            valor = fila[columna]
-            tipo = type(valor).__name__
-            # Marcar valores vacíos o nulos
-            if pd.isna(valor):
-                log.info(f"│  [{columna}] → (vacío)")
-            else:
-                log.info(f"│  [{columna}] ({tipo}) → {valor}")
-        log.info(f"└────────────────────────────────────")
+        keyword = fila["keyword"]
+        location = construir_location(fila["city"], fila["state"], fila["country"])
+        payload = construir_payload(keyword, location)
+        
+        log.info(f"[{idx + 1}/{len(df)}] Payload que se enviaría:")
+        for clave, valor in payload.items():
+            log.info(f"    {clave:15} → {valor}")
+        log.info("")  # línea en blanco entre filas
 
 def main():
-    df = leer_excel(EXCEL_FILE, SHEET_NAME)
-    imprimir_celdas(df)
-    log.info("=== FIN ===")
+    df = leer_excel(EXCEL_FILE)
+    simular_envio(df)
+    log.info("=== Lectura completa. Listos para conectar a la API en la Parte 2. ===")
 
 if __name__ == "__main__":
     main()
